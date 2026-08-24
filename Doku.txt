@@ -70,3 +70,5 @@ Moegliche Anpassungen:
     - Auseinander ziehen der Straße Nr, PLZ Ort zu Strasse Nr., PLZ, Ort
 
 Aufgrund der zukuenftigen Aufgaben werden zwei Spalten hinzugefuegt als Schluessel einmall "imp" als string, der ueberall den Wert "Excel" hat und "install" die als int hochzaehlt (serial) 
+
+nach dem erstellen war der Bestand der Emails falsch daher aus einer alten excel in die neue einstezen
