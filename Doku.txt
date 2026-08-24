@@ -1,0 +1,52 @@
+Beginn mit der Analyse der Excel Liste
+moegliche Datenschaeden: - Doppelte Werte
+                         - Sonderzeichen
+                         - Null Werte
+                         - fehlerhafte Eingaben (Tippfehler)
+                         - Kaputte Zeilen 
+
+Nach ersten Blick in Excel faellt auf % Bei Hobbys, kurze strings mit "m", "w", Email wahrscheinlich ab und zu fehlerhaft.
+
+Genau wie bei interessen, bei m, w, mw bieten sich potenziel 0,1,2 an als Int fuer Perfomence, da spaeter viele auf eine Datenbank zugreifen werden.
+    Nach kurzer Recherche lohnt es sich noch nicht erst ab einer Milionen Datensaetzen.
+    
+Erster Schritt neue Spalten pro Hobby einfuegen
+% dient zur Trennung zur Sicherheit re.compile(r"([^%;]+?)\s*%(\d+)%\s*;?") um Moegliche Leerzeichen abzufangen genau wie angabe das beim Hobby kein % oder ; steht wegen Formatierungsfehlern. und das bei der Doku Zeichen stehen.
+
+Es haben 10 Leute keine Hobby was auffaellig ist sowie dass nur perfekte Paarungen bestehen.
+
+Emails auslesen hat gezeigt, dass die Endungen der Email adressen fehlerhaft sind und pseudos enthalten.
+Alles vor dem @ laesst sich nicht ueberpruefen, da es eine Datingplattform ist werden Privat-/Spassemails verwendet.
+iunitimail sehr unklar was es sein soll beleibt daher gleich.
+
+Geschlecht und Interesse an passen soweit, nichts auffaelliges in der Ueberpruefung bekommen
+
+Geburtsdatumsueberpruefung hat keine Ausfaelligkeit ergeben.
+
+Bei den Telefonnummern gibt es viele Muster die akzeptiert wurden. Allerdings startet nur die  824696843 ohne eine 0 vorne was auffaellig ist.
+Ausserdem sind 13 Telefonnumern kuerzer als 9 stellen wie :
+    Schulte, Erich 04774 / 716
+      Niehaus, Jan 05361 / 135
+  Brößkamp, Sigrid 0208 / 9720
+Hassenkamp, Alfred 030 / 22282
+    Aurel, Mohamed 05141 / 566
+        Päts, Gita (05431) 819
+  Ostermann, Horst 0541 / 1803
+ Mielke, Elisabeth 0521 / 4950
+ Mahlstedt, Nadine 050 / 23221
+Gröcker, Christine 02729 / 234
+    Baentsch, Dana 0162 / 2534
+     Panzer, Petra 05421 / 878
+  Isabel, Ferreira 06074 / 232
+
+Diese werden vermutlich nicht funktionieren.
+
+Bei der Namensueberpruefung kam heraus das ein doppeltes Leerzeichen bei Madalina  , Stoica vorliegt und nur der Name Müller, Elisabeth doppelt vorkommt.
+
+Die Adressueberpruefung ergab dass nur drei Adressen von der Kommazahl unterschiedlich sind: 
+Nachname, Vorname                              Straße Nr, PLZ Ort
+    Lange, Ansgar       Boniverstr. 25, 17109, Demmin, Hansestadt
+ Langenkamp, Gerd Borchshöher Str. 105, 17109, Demmin, Hansestadt
+        Lang, Eva   Boltensternstr. 73, 17109, Demmin, Hansestadt
+
+Ausserdem  haben 58 Adressen nur vierstellige Postleitzahlen
