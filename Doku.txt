@@ -19,12 +19,12 @@ Emails auslesen hat gezeigt, dass die Endungen der Email adressen fehlerhaft sin
 Alles vor dem @ laesst sich nicht ueberpruefen, da es eine Datingplattform ist werden Privat-/Spassemails verwendet.
 iunitimail sehr unklar was es sein soll beleibt daher gleich.
 
-Geschlecht und Interesse an passen soweit, nichts auffaelliges in der Ueberpruefung bekommen
+Geschlecht und Interesse an passen soweit, nichts auffaelliges in der Ueberpruefung bekommen.
 
 Geburtsdatumsueberpruefung hat keine Ausfaelligkeit ergeben.
 
 Bei den Telefonnummern gibt es viele Muster die akzeptiert wurden. Allerdings startet nur die  824696843 ohne eine 0 vorne was auffaellig ist.
-Ausserdem sind 13 Telefonnumern kuerzer als 9 stellen wie :
+   Ausserdem sind 13 Telefonnumern kuerzer als 9 stellen wie :
     Schulte, Erich 04774 / 716
       Niehaus, Jan 05361 / 135
   Brößkamp, Sigrid 0208 / 9720
@@ -39,7 +39,7 @@ Gröcker, Christine 02729 / 234
      Panzer, Petra 05421 / 878
   Isabel, Ferreira 06074 / 232
 
-Diese werden vermutlich nicht funktionieren.
+Diese werden vermutlich nicht funktionieren, werden aber trotzdem uebernommen falls es sich um internationale Nummern handelt oder um geschaeftliche oder einen historischen Telefonanschluss.
 
 Bei der Namensueberpruefung kam heraus das ein doppeltes Leerzeichen bei Madalina  , Stoica vorliegt und nur der Name Müller, Elisabeth doppelt vorkommt.
 
@@ -49,4 +49,24 @@ Nachname, Vorname                              Straße Nr, PLZ Ort
  Langenkamp, Gerd Borchshöher Str. 105, 17109, Demmin, Hansestadt
         Lang, Eva   Boltensternstr. 73, 17109, Demmin, Hansestadt
 
-Ausserdem  haben 58 Adressen nur vierstellige Postleitzahlen
+Ausserdem  haben 58 Adressen vierstellige Postleitzahlen
+
+Die Spalte D mit dem Namen "Hobby1 %Prio1%; Hobby2 %Prio2%; Hobby3 %Prio3%; Hobby4 %Prio4%; Hobby5 %Prio5%;"  kann raus aus der Excel.
+
+Moegliche Anpassungen:
+    -Telefonnummer mit der fehlenden 0
+         Wahrscheinlich ein User Error, da er nur seine Nummer angegeben hat und nicht die nationale Durchwahl, daher wird eine Null dann vorher hinzugefuegt.
+    -die 13 kuerzeren Telefonnummern
+        werden nicht veraendet da sie exsistieren koennten
+    - Namen doppeltes Leerzeichen
+        Madalina  , Stoica wird angepasst
+    - Name ist doppelt
+        wird nicht angepasst, da es moeglich ist
+    - vierstellige Postleitzahlen 
+        werden zu den fuenfstelligen konvertiert
+    - Adressen mit anderer Kommazahl
+        Hansestadt wird entfernt
+    - Auseinadner ziehen der Namen, Vorname Spalte zu Name und Vorname
+    - Auseinander ziehen der Straße Nr, PLZ Ort zu Strasse Nr., PLZ, Ort
+
+Aufgrund der zukuenftigen Aufgaben werden zwei Spalten hinzugefuegt als Schluessel einmall "imp" als string, der ueberall den Wert "Excel" hat und "install" die als int hochzaehlt (serial) 
