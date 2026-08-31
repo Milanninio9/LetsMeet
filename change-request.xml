@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<transferpack>
+  <records>
+    <like email="abdel.sabah@1mal1.te" target_email="transfer.orphan@letsmeet.invalid"/>
+    <hobby email="abdel.sabah@1mal1.te" name="E-Mails schreiben"/>
+    <hobby email="abdulk..stuckmann@web.kom" name="Abends seinem Partner Ereignisse des Tages erzählen" priority="101"/>
+    <profile email="transfer.p2@letsmeet.invalid" first_name="Pia" last_name="Transfer" birth_date="01.01.1900" postal_code="69115" city="unbekannt" phone="+49 6221 123456" gender="w"/>
+    <hobby email="acar.nehir@ge-em-ix.kom" name="Abends seinem Partner Ereignisse des Tages erzählen"/>
+    <hobby email="acar.nehir@ge-em-ix.kom" name="Abends seinem Partner Ereignisse des Tages erzählen"/>
+  </records>
+</transferpack>

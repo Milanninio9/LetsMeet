@@ -1,0 +1,77 @@
+{
+  "pack_id": "letsmeet-transfer-v3",
+  "version": "3",
+  "encoding": "UTF-8",
+  "file_order": [
+    "README.md",
+    "manifest.json",
+    "change-request.xml",
+    "encoding-invalid.xml",
+    "encoding-mojibake.xml"
+  ],
+  "physical_record_count": 8,
+  "files": [
+    {
+      "name": "README.md",
+      "sha256": "8a15d1cd82b2f316b3625b0a6f18b44f02b4f3b7a98a744776d42eaab6ea9fa9",
+      "record_count": 0
+    },
+    {
+      "name": "change-request.xml",
+      "sha256": "935900c0f8db04e59a408a98529be780eefa0323167cb3cc7dabb24259852358",
+      "record_count": 6
+    },
+    {
+      "name": "encoding-invalid.xml",
+      "sha256": "8f78ab47dd9a5574e887bdc267ff2778e3895f908a28c1fb6a72228bdf27fe07",
+      "record_count": 1
+    },
+    {
+      "name": "encoding-mojibake.xml",
+      "sha256": "3a0777e42cc149a6014379e794a51ec6086207a11a0768c42da6fe310406f0dd",
+      "record_count": 1
+    }
+  ],
+  "source_refs": [
+    {
+      "source": "change-request.xml",
+      "source_ref": "/transferpack/records/like[1]",
+      "record_count": 1
+    },
+    {
+      "source": "change-request.xml",
+      "source_ref": "/transferpack/records/hobby[1]",
+      "record_count": 1
+    },
+    {
+      "source": "change-request.xml",
+      "source_ref": "/transferpack/records/hobby[2]",
+      "record_count": 1
+    },
+    {
+      "source": "change-request.xml",
+      "source_ref": "/transferpack/records/profile[1]",
+      "record_count": 1
+    },
+    {
+      "source": "change-request.xml",
+      "source_ref": "/transferpack/records/hobby[3]",
+      "record_count": 1
+    },
+    {
+      "source": "change-request.xml",
+      "source_ref": "/transferpack/records/hobby[4]",
+      "record_count": 1
+    },
+    {
+      "source": "encoding-invalid.xml",
+      "source_ref": "/transferpack/records/profile[1]",
+      "record_count": 1
+    },
+    {
+      "source": "encoding-mojibake.xml",
+      "source_ref": "/transferpack/records/profile[1]",
+      "record_count": 1
+    }
+  ]
+}
