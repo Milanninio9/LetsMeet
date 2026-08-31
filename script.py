@@ -151,16 +151,13 @@ def main():
     print(f"{len(hobby)} unterschiedliche Hobbys")
 
     # ------------------------------------------------------------------
-    section("7. person-Tabelle")
+    section("7. person-Tabelle (ohne Kontaktfelder)")
     person = pd.DataFrame({
         "person_id":      range(1, len(df) + 1),
         "install":        df["install"].values,
         "imp":            df["imp"].values,
         "nachname":       df["nachname"].values,
         "vorname":        df["vorname"].values,
-        "strasse_nr":     df["strasse_nr"].values,
-        "telefon":        df["Telefon"].values,
-        "email":          df["E-Mail"].values,
         "geschlecht":     df["Geschlecht (m/w/nonbinary)"].values,
         "interessiert_an":df["Interessiert an"].values,
         "geburtsdatum":   df["geburtsdatum"].values,
@@ -168,6 +165,17 @@ def main():
                            for p, s in zip(df["plz"], df["stadt"])],
     })
     print(f"{len(person)} Personen")
+
+    # ------------------------------------------------------------------
+    section("7b. kontakt-Tabelle: email, strasse_nr, telefon")
+    kontakt = pd.DataFrame({
+        "kontakt_id": range(1, len(df) + 1),
+        "person_id":  range(1, len(df) + 1),
+        "email":      df["E-Mail"].values,
+        "strasse_nr": df["strasse_nr"].values,
+        "telefon":    df["Telefon"].values,
+    })
+    print(f"{len(kontakt)} Kontakt-Eintraege")
 
     # ------------------------------------------------------------------
     section("8. person_hobby-Tabelle: n:m-Zuordnung")
@@ -198,6 +206,7 @@ def main():
         conn.execute(text("DROP VIEW  IF EXISTS migration_users CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS letsmeet      CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS person_hobby  CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS kontakt       CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS person        CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS hobby         CASCADE"))
         conn.execute(text("DROP TABLE IF EXISTS ort           CASCADE"))
@@ -223,13 +232,19 @@ def main():
                 imp             TEXT,
                 nachname        TEXT    NOT NULL,
                 vorname         TEXT    NOT NULL,
-                strasse_nr      TEXT,
-                telefon         TEXT,
-                email           TEXT    NOT NULL UNIQUE,
                 geschlecht      TEXT,
                 interessiert_an TEXT,
                 geburtsdatum    DATE    NOT NULL,
                 ort_id          INTEGER NOT NULL REFERENCES ort(ort_id)
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE kontakt (
+                kontakt_id INTEGER PRIMARY KEY,
+                person_id  INTEGER NOT NULL UNIQUE REFERENCES person(person_id),
+                email      TEXT    NOT NULL UNIQUE,
+                strasse_nr TEXT,
+                telefon    TEXT
             )
         """))
         conn.execute(text("""
@@ -246,6 +261,7 @@ def main():
     ort.to_sql("ort",           engine, if_exists="append", index=False)
     hobby.to_sql("hobby",       engine, if_exists="append", index=False)
     person.to_sql("person",     engine, if_exists="append", index=False)
+    kontakt.to_sql("kontakt",   engine, if_exists="append", index=False)
     person_hobby.to_sql("person_hobby", engine, if_exists="append", index=False)
     print("Alle Daten eingefuegt.")
 
@@ -258,21 +274,22 @@ def main():
         conn.execute(text("""
             CREATE VIEW migration_users AS
             SELECT
-                p.email         AS email,
+                k.email         AS email,
                 p.vorname       AS first_name,
                 p.nachname      AS last_name,
                 p.geburtsdatum  AS birth_date,
                 o.plz           AS postal_code,
                 o.stadt         AS city
             FROM person p
-            JOIN ort o ON p.ort_id = o.ort_id
+            JOIN ort o     ON p.ort_id    = o.ort_id
+            JOIN kontakt k ON k.person_id = p.person_id
         """))
     print("View 'migration_users' angelegt.")
 
     # ------------------------------------------------------------------
     section("Kontrolle")
     with engine.connect() as conn:
-        for t in ["ort", "hobby", "person", "person_hobby"]:
+        for t in ["ort", "hobby", "person", "kontakt", "person_hobby"]:
             n = conn.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar()
             print(f"  {t}: {n} Zeilen")
 
