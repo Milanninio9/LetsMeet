@@ -4,7 +4,7 @@ moegliche Datenschaeden: - Doppelte Werte
                          - Null Werte
                          - fehlerhafte Eingaben (Tippfehler)
                          - Kaputte Zeilen 
-
+ 
 Nach ersten Blick in Excel faellt auf % Bei Hobbys, kurze strings mit "m", "w", Email wahrscheinlich ab und zu fehlerhaft.
 
 Genau wie bei interessen, bei m, w, mw bieten sich potenziel 0,1,2 an als Int fuer Perfomence, da spaeter viele auf eine Datenbank zugreifen werden.
