@@ -1,300 +1,303 @@
-"""
-Schema:
 
-  ort(ort_id PK, plz TEXT NOT NULL, stadt TEXT NOT NULL)
-      - eine Zeile je (PLZ, Stadt)-Kombination.
-      - (plz, stadt) zusammen UNIQUE.
 
-  hobby(hobby_id PK, name TEXT NOT NULL UNIQUE)
-      - eine Zeile je unterschiedlichem Hobby.
+import re                                         # Regex fuer die Hobby-Spalte
+import pandas as pd                               # Einlesen und Umformen der Quelldaten
+from pathlib import Path                          # plattformunabhaengige Pfade
+from sqlalchemy import create_engine, text        # DB-Verbindung + rohes SQL
 
-  person(person_id PK, install, imp,
-         nachname NOT NULL, vorname NOT NULL,
-         strasse_nr, telefon,
-         email NOT NULL UNIQUE,
-         geschlecht, interessiert_an,
-         geburtsdatum NOT NULL,
-         ort_id NOT NULL FK -> ort)
-      - NOT NULL auf allen View-Pflichtfeldern.
+FILENAME = "Lets Meet DB Dump.xlsx"               # Name der Excel-Quelldatei
+HOBBY_COL = "Hobby1 %Prio1%; Hobby2 %Prio2%; Hobby3 %Prio3%; Hobby4 %Prio4%; Hobby5 %Prio5%;"   # exakter Spaltenname
+HOBBY_PATTERN = re.compile(r"([^%;]+?)\s*%(\d+)%\s*;?")   # Gruppe 1 = Hobbyname, Gruppe 2 = Prioritaet
+TRENNER = ", "                                    # Trennzeichen fuer Name und Adresse
 
-  person_hobby(person_id FK, hobby_id FK, prioritaet)
-      - zusammengesetzter PK (person_id, hobby_id).
-
-  VIEW migration_users(email, first_name, last_name,
-                       birth_date, postal_code, city)
-      - alle Felder NOT NULL (via person + ort).
-
-"""
-
-import re                                          # Regex fuer das Zerlegen der Hobby-Spalte
-import pandas as pd                                # Einlesen und Umformen der Excel-Daten
-from pathlib import Path                           # plattformunabhaengige Pfade
-from sqlalchemy import create_engine, text         # DB-Verbindung + rohes SQL ausfuehren
-
-FILENAME = "Lets Meet DB Dump.xlsx"                # Name der Quelldatei, die gesucht wird
-HOBBY_COL = "Hobby1 %Prio1%; Hobby2 %Prio2%; Hobby3 %Prio3%; Hobby4 %Prio4%; Hobby5 %Prio5%;"   # exakter Spaltenname in der Excel
-HOBBY_PATTERN = re.compile(r"([^%;]+?)\s*%(\d+)%\s*;?")   # Gruppe 1 = Hobbyname, Gruppe 2 = Prioritaetszahl zwischen %%
-TRENNER = ", "   # exakt: Komma + ein Leerzeichen, kein strip()   # Trennzeichen fuer Name/Adresse
-
-DB_USER = "user"                                   # DB-Benutzername
-DB_PASSWORD = "secret"                             # DB-Passwort
-DB_HOST = "localhost"                              # DB-Host
-DB_PORT = 5432                                     # PostgreSQL-Standardport
-DB_NAME = "lf8_lets_meet_db"                       # Zieldatenbank
+DB_URL = "postgresql+psycopg2://user:secret@localhost:5432/lf8_lets_meet_db"   # Ziel-Datenbank
+MONGO_URL = "mongodb://localhost:27017"           # MongoDB-Server
+MONGO_DB = "lets_meet"                            # MongoDB-Datenbank
+MONGO_COLL = "users"                              # MongoDB-Collection
 
 try:
-    SCRIPT_DIR = Path(__file__).resolve().parent   # Ordner der Skriptdatei (normaler Aufruf)
+    SCRIPT_DIR = Path(__file__).resolve().parent  # Ordner der Skriptdatei
 except NameError:
-    SCRIPT_DIR = Path.cwd()                        # Fallback: __file__ fehlt (Notebook/REPL) -> aktuelles Verzeichnis
+    SCRIPT_DIR = Path.cwd()                       # Fallback fuer Notebook/REPL
+
+def leer_zu_none(wert):
+    """'' und reine Leerzeichen zu None -> sonst greift COALESCE nicht."""
+    if wert is None:                              # schon None -> nichts zu tun
+        return None
+    s = str(wert).strip()                         # in Text wandeln, Rand-Leerzeichen weg
+    return s if s else None                       # leerer Rest wird zu None
+
+
+def norm_email(wert):
+    """E-Mail vereinheitlichen: klein + getrimmt. Basis fuer das Matching."""
+    s = leer_zu_none(wert)                        # erst die normale Leer-Behandlung
+    return s.lower() if s else None               # dann konsequent kleinschreiben
+
+
+def section(titel):
+    print("\n" + "=" * 70)                        # Leerzeile + Trennlinie
+    print(titel)                                  # Abschnitts-Ueberschrift
+    print("=" * 70)                               # Trennlinie darunter
 
 
 def finde_xlsx(dateiname=FILENAME):
-    kandidaten = [                                 # Liste wahrscheinlicher Speicherorte, in Pruefreihenfolge
-        SCRIPT_DIR / dateiname, SCRIPT_DIR.parent / dateiname,      # neben dem Skript und eine Ebene darueber
-        Path.cwd() / dateiname, Path.cwd().parent / dateiname,      # im Arbeitsverzeichnis und darueber
-        Path.home() / dateiname,                                    # im Home-Verzeichnis
-        Path.home() / "work" / dateiname,                           # ~/work
-        Path.home() / "work" / "letsmeet" / dateiname,              # ~/work/letsmeet
-        Path.home() / "LetsMeet" / dateiname,                       # ~/LetsMeet
+    kandidaten = [                                # wahrscheinliche Speicherorte
+        SCRIPT_DIR / dateiname, SCRIPT_DIR.parent / dateiname,   # neben dem Skript / darueber
+        Path.cwd() / dateiname, Path.home() / dateiname,         # Arbeitsverzeichnis / Home
+        Path.home() / "work" / dateiname,                        # ~/work
     ]
-    for pfad in kandidaten:                        # Kandidaten der Reihe nach durchgehen
-        if pfad.exists():                          # erste existierende Datei gewinnt
-            return pfad                            # gefundenen Pfad zurueckgeben
-    treffer = list(Path.home().rglob(dateiname))   # Notfall: rekursiv das ganze Home durchsuchen (langsam)
-    if treffer:                                    # wenn dabei etwas gefunden wurde
-        return treffer[0]                          # den ersten Treffer nehmen
-    orte = "\n".join(f"  - {k}" for k in kandidaten)   # Kandidatenliste fuer die Fehlermeldung formatieren
-    raise FileNotFoundError(f"'{dateiname}' nicht gefunden:\n{orte}")   # Abbruch mit Hinweis, wo gesucht wurde
+    for pfad in kandidaten:                       # Kandidaten der Reihe nach pruefen
+        if pfad.exists():                         # erste existierende Datei gewinnt
+            return pfad
+    treffer = list(Path.home().rglob(dateiname))  # Notfall: Home rekursiv durchsuchen
+    if treffer:
+        return treffer[0]                         # ersten Treffer nehmen
+    raise FileNotFoundError(f"'{dateiname}' nicht gefunden.")   # sonst sauber abbrechen
+
+def erstelle_schema(engine):
+    with engine.begin() as conn:                  # Transaktion, am Ende COMMIT
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS ort (
+                ort_id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,  -- ID von PostgreSQL
+                plz    TEXT NOT NULL,                                         -- PLZ als Text
+                stadt  TEXT NOT NULL,                                         -- Ortsname
+                UNIQUE (plz, stadt)                                           -- verhindert Ort-Dubletten
+            )"""))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS hobby (
+                hobby_id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,   -- ID von PostgreSQL
+                name     TEXT NOT NULL UNIQUE                                    -- verhindert Hobby-Dubletten
+            )"""))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS person (
+                person_id       INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,   -- ID von PostgreSQL
+                imp             TEXT    NOT NULL,        -- Quelle, die den Satz angelegt hat
+                install         INTEGER NOT NULL,        -- laufende Nummer je Quelle
+                nachname        TEXT    NOT NULL,        -- Pflichtfeld der View
+                vorname         TEXT    NOT NULL,        -- Pflichtfeld der View
+                geschlecht      TEXT,                    -- optional, wird ggf. ergaenzt
+                interessiert_an TEXT,                    -- optional, wird ggf. ergaenzt
+                geburtsdatum    DATE    NOT NULL,        -- Pflichtfeld der View
+                ort_id          INTEGER NOT NULL REFERENCES ort(ort_id),   -- FK auf ort
+                UNIQUE (imp, install)                    -- natuerlicher Schluessel zur Quelle
+            )"""))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS kontakt (
+                kontakt_id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,      -- ID von PostgreSQL
+                person_id  INTEGER NOT NULL UNIQUE REFERENCES person(person_id),      -- UNIQUE = 1:1 zu person
+                email      TEXT    NOT NULL UNIQUE,      -- harte Dublettensperre + Matching-Feld
+                strasse_nr TEXT,                         -- optional, wird ggf. ergaenzt
+                telefon    TEXT                          -- optional, wird ggf. ergaenzt
+            )"""))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS person_hobby (
+                person_id  INTEGER NOT NULL REFERENCES person(person_id),   -- FK auf person
+                hobby_id   INTEGER NOT NULL REFERENCES hobby(hobby_id),     -- FK auf hobby
+                prioritaet INTEGER,                                         -- Rang 1..5, optional
+                PRIMARY KEY (person_id, hobby_id)                           -- jedes Hobby je Person nur einmal
+            )"""))
+        conn.execute(text("""
+            CREATE OR REPLACE VIEW migration_users AS     -- REPLACE = beliebig oft ausfuehrbar
+            SELECT k.email AS email, p.vorname AS first_name,      -- Zielfeldnamen englisch
+                   p.nachname AS last_name, p.geburtsdatum AS birth_date,
+                   o.plz AS postal_code, o.stadt AS city
+            FROM person p
+            JOIN ort o     ON p.ort_id    = o.ort_id      -- Ort je Person
+            JOIN kontakt k ON k.person_id = p.person_id   -- Kontaktdaten je Person
+        """))
+    print("Schema geprueft/angelegt.")             # Statusmeldung
+
+def lade_excel():
+    df = pd.read_excel(finde_xlsx(), dtype=str, keep_default_na=False)   # alles als Text, leere Zellen = ""
+
+    name = df["Nachname, Vorname"].str.split(TRENNER, n=1, expand=True)  # 1 Split -> 2 Spalten
+    adr = df["Straße Nr, PLZ Ort"].str.split(TRENNER, n=2, expand=True)  # 2 Splits -> 3 Spalten
+
+    parsed = df[HOBBY_COL].apply(                          # je Zeile Liste aus (Hobby, Prio)
+        lambda t: HOBBY_PATTERN.findall(t) if isinstance(t, str) else [])
+
+    out = pd.DataFrame({
+        "nachname":        name[0].map(leer_zu_none),      # Teil vor dem Komma
+        "vorname":         name[1].map(leer_zu_none),      # Teil nach dem Komma
+        "email":           df["E-Mail"].map(norm_email),   # normalisiert -> Matching-Schluessel
+        "strasse_nr":      adr[0].map(leer_zu_none),       # "Musterweg 12"
+        "telefon":         df["Telefon"].map(leer_zu_none),                    # Telefonnummer
+        "geschlecht":      df["Geschlecht (m/w/nonbinary)"].map(leer_zu_none), # m/w/nonbinary
+        "interessiert_an": df["Interessiert an"].map(leer_zu_none),            # Praeferenz
+        "plz":             adr[1].map(leer_zu_none),       # Postleitzahl
+        "stadt":           adr[2].map(leer_zu_none),       # Ortsname
+        "geburtsdatum":    pd.to_datetime(df["Geburtsdatum"],      # deutsches Datumsformat
+                                          format="%d.%m.%Y",
+                                          errors="coerce").dt.date,   # ungueltig -> NaT
+    })
+    out["hobbys"] = parsed.apply(                          # Rohtreffer in Tupel-Liste wandeln
+        lambda p: [(h.strip(), int(prio)) for h, prio in p])
+    return out                                             # einheitliches Format zurueck
 
 
-def section(title):
-    print("\n" + "=" * 70)                         # Leerzeile + Trennlinie
-    print(title)                                   # Ueberschrift des Abschnitts
-    print("=" * 70)                                # Trennlinie darunter
+def lade_mongodb():
+    """ACHTUNG: Feldnamen an die eigene Collection anpassen (findOne() ansehen)."""
+    from pymongo import MongoClient                        # Import lokal: nur noetig, wenn genutzt
+
+    docs = list(MongoClient(MONGO_URL)[MONGO_DB][MONGO_COLL].find({}))   # alle Dokumente holen
+    zeilen = []                                            # Sammelliste
+    for d in docs:                                         # jedes Dokument umformen
+        zeilen.append({
+            "nachname":        leer_zu_none(d.get("last_name")),       # .get() = kein KeyError
+            "vorname":         leer_zu_none(d.get("first_name")),      # bei fehlendem Feld
+            "email":           norm_email(d.get("email")),             # gleiche Normalisierung wie Excel
+            "strasse_nr":      leer_zu_none(d.get("street")),          # Strasse + Hausnummer
+            "telefon":         leer_zu_none(d.get("phone")),           # Telefonnummer
+            "geschlecht":      leer_zu_none(d.get("gender")),          # Geschlecht
+            "interessiert_an": leer_zu_none(d.get("interested_in")),   # Praeferenz
+            "plz":             leer_zu_none(d.get("postal_code")),     # Postleitzahl
+            "stadt":           leer_zu_none(d.get("city")),            # Ortsname
+            "geburtsdatum":    pd.to_datetime(d.get("birth_date"),     # Format wird geraten
+                                              errors="coerce").date()
+                               if d.get("birth_date") else None,       # Feld fehlt -> None
+            "hobbys":          [(h, None) for h in d.get("hobbies", [])],   # Mongo hat keine Prios
+        })
+    return pd.DataFrame(zeilen)                            # einheitliches Format zurueck
+
+def importiere(engine, df, quelle):
+    section(f"Import Quelle '{quelle}' ({len(df)} Rohzeilen)")
+
+    df = df.copy().reset_index(drop=True)          # Original nicht veraendern, Index normalisieren
+
+    pflicht = ["email", "nachname", "vorname", "geburtsdatum", "plz", "stadt"]   # NOT-NULL-Felder
+    unvollstaendig = df[pflicht].isna().any(axis=1)        # Zeilen mit Luecke markieren
+    if unvollstaendig.any():                               # wenn es welche gibt
+        print(f"  {unvollstaendig.sum()} Zeilen ohne Pflichtfeld -> uebersprungen")
+        df = df[~unvollstaendig]                           # aussortieren statt am NOT NULL zu scheitern
+
+    vor = len(df)                                          # Zeilenzahl merken
+    df = df.drop_duplicates(subset="email", keep="first")  # Dubletten INNERHALB der Quelle
+    if vor != len(df):                                     # wenn welche entfernt wurden
+        print(f"  {vor - len(df)} quellinterne E-Mail-Dubletten entfernt")
+
+    if df.empty:                                           # nichts uebrig
+        print("  Nichts zu importieren.")
+        return                                             # frueh aussteigen
+
+    with engine.begin() as conn:                           # eine Transaktion fuer den ganzen Import
+
+        for plz, stadt in df[["plz", "stadt"]].drop_duplicates().itertuples(index=False):
+            conn.execute(text("INSERT INTO ort (plz, stadt) VALUES (:p, :s) "
+                              "ON CONFLICT (plz, stadt) DO NOTHING"),   # existiert schon -> ignorieren
+                         {"p": plz, "s": stadt})
+
+        namen = {h for liste in df["hobbys"] for h, _ in liste if h}    # alle Hobbynamen der Quelle
+        for n in namen:                                                 # Menge = schon dublettenfrei
+            conn.execute(text("INSERT INTO hobby (name) VALUES (:n) "
+                              "ON CONFLICT (name) DO NOTHING"), {"n": n})   # Dublette -> ignorieren
+
+        ort_lookup = {(r[1], r[2]): r[0] for r in                       # (plz, stadt) -> ort_id
+                      conn.execute(text("SELECT ort_id, plz, stadt FROM ort"))}
+        hobby_lookup = {r[1]: r[0] for r in                             # name -> hobby_id
+                        conn.execute(text("SELECT hobby_id, name FROM hobby"))}
+        bekannt = {r[0]: r[1] for r in                                  # email -> person_id (Bestand)
+                   conn.execute(text("SELECT email, person_id FROM kontakt"))}
+
+        neu = df[~df["email"].isin(bekannt)]               # E-Mail unbekannt -> neue Person
+        alt = df[df["email"].isin(bekannt)]                # E-Mail bekannt   -> nur ergaenzen
+        print(f"  {len(neu)} neue Personen, {len(alt)} bereits vorhanden")
+
+        offset = conn.execute(text(
+            "SELECT COALESCE(MAX(install), 0) FROM person WHERE imp = :q"),   # 0 beim ersten Lauf
+            {"q": quelle}).scalar()
+        print(f"  install startet bei {offset + 1}")       # beim ersten Lauf also bei 1
+
+        for i, r in enumerate(neu.itertuples(), start=1):  # zeilenweise, damit RETURNING nutzbar ist
+            pid = conn.execute(text("""
+                INSERT INTO person (imp, install, nachname, vorname, geschlecht,
+                                    interessiert_an, geburtsdatum, ort_id)
+                VALUES (:imp, :install, :nachname, :vorname, :geschlecht,
+                        :interessiert_an, :geburtsdatum, :ort_id)
+                RETURNING person_id
+            """), {                                        # RETURNING liefert die frische ID direkt
+                "imp": quelle,                             # Quellenkennzeichen
+                "install": offset + i,                     # fortlaufende Nummer
+                "nachname": r.nachname, "vorname": r.vorname,
+                "geschlecht": r.geschlecht, "interessiert_an": r.interessiert_an,
+                "geburtsdatum": r.geburtsdatum,
+                "ort_id": ort_lookup[(r.plz, r.stadt)],    # FK per Lookup aufloesen
+            }).scalar_one()                                # genau ein Wert erwartet
+
+            conn.execute(text("""
+                INSERT INTO kontakt (person_id, email, strasse_nr, telefon)
+                VALUES (:pid, :email, :strasse_nr, :telefon)
+            """), {"pid": pid, "email": r.email,           # kein ON CONFLICT noetig:
+                   "strasse_nr": r.strasse_nr,             # die E-Mail war nachweislich neu
+                   "telefon": r.telefon})
+
+            bekannt[r.email] = pid                         # Lookup fuer den Hobby-Teil ergaenzen
+
+        for r in alt.itertuples():                         # nur auffuellen, nie ueberschreiben
+            pid = bekannt[r.email]                         # person_id aus dem Bestand
+            conn.execute(text("""
+                UPDATE person SET
+                    geschlecht      = COALESCE(geschlecht, :g),    -- NULL -> neuer Wert, sonst unveraendert
+                    interessiert_an = COALESCE(interessiert_an, :i)
+                WHERE person_id = :pid
+            """), {"g": r.geschlecht, "i": r.interessiert_an, "pid": pid})
+            conn.execute(text("""
+                UPDATE kontakt SET
+                    strasse_nr = COALESCE(strasse_nr, :s),         -- gleiche Logik fuer Kontaktdaten
+                    telefon    = COALESCE(telefon, :t)
+                WHERE person_id = :pid
+            """), {"s": r.strasse_nr, "t": r.telefon, "pid": pid})
+
+        zuordnungen = []                                   # Sammelliste
+        for r in df.itertuples():                          # neue und bekannte Personen
+            pid = bekannt.get(r.email)                     # person_id nachschlagen
+            if pid is None:                                # sollte nicht vorkommen
+                continue                                   # sicherheitshalber ueberspringen
+            for name_h, prio in r.hobbys:                  # alle Hobbys der Zeile
+                if name_h in hobby_lookup:                 # nur bekannte Namen
+                    zuordnungen.append({"pid": pid,
+                                        "hid": hobby_lookup[name_h],
+                                        "prio": prio})
+        if zuordnungen:                                    # nur wenn es etwas gibt
+            conn.execute(text("""
+                INSERT INTO person_hobby (person_id, hobby_id, prioritaet)
+                VALUES (:pid, :hid, :prio)
+                ON CONFLICT (person_id, hobby_id) DO NOTHING   -- Zuordnung existiert -> ignorieren
+            """), zuordnungen)
+        print(f"  {len(zuordnungen)} Hobby-Zuordnungen verarbeitet")
+
+def kontrolle(engine):
+    section("Kontrolle")
+    with engine.connect() as conn:                         # nur lesend
+        for t in ["ort", "hobby", "person", "kontakt", "person_hobby"]:
+            n = conn.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar()   # Zeilen zaehlen
+            print(f"  {t}: {n} Zeilen")                    # Ergebnis ausgeben
+
+        print("\n  Personen je Quelle:")                   # zeigt, was welcher Lauf angelegt hat
+        for imp, n in conn.execute(text(
+                "SELECT imp, COUNT(*) FROM person GROUP BY imp ORDER BY imp")):
+            print(f"    {imp}: {n}")
+
+        n_view = conn.execute(text("SELECT COUNT(*) FROM migration_users")).scalar()   # Zeilen der View
+        n_mail = conn.execute(text(
+            "SELECT COUNT(DISTINCT email) FROM migration_users")).scalar()             # eindeutige E-Mails
+        print(f"\n  migration_users: {n_view} Zeilen, {n_mail} eindeutige E-Mails")
+        if n_view != n_mail:                               # beide Zahlen muessen gleich sein
+            print("  WARNUNG: E-Mail-Dubletten in der View!")
+
+        waisen = conn.execute(text("""
+            SELECT COUNT(*) FROM person p                      -- Person ohne Kontaktsatz waere das
+            LEFT JOIN kontakt k ON k.person_id = p.person_id   -- Zeichen eines Abbruchs mitten drin
+            WHERE k.person_id IS NULL
+        """)).scalar()
+        print(f"  Personen ohne Kontaktsatz: {waisen}")    # sollte immer 0 sein
 
 
 def main():
-    xlsx_path = finde_xlsx()                       # Quelldatei lokalisieren
-    # dtype=str + keep_default_na=False: Rohtext exakt erhalten
-    df = pd.read_excel(xlsx_path, dtype=str, keep_default_na=False)   # alles als Text, leere Zellen bleiben "" statt NaN
-    print(f"Eingelesen: {xlsx_path} ({df.shape[0]} Zeilen)")          # Kontrollausgabe: Pfad + Zeilenzahl
-
-    
-    section("1. Namen aufteilen (Split an ', ', KEIN strip)")
-    name_split = df["Nachname, Vorname"].str.split(TRENNER, n=1, expand=True)   # max. 1 Split -> 2 Spalten
-    df["nachname"] = name_split[0]                 # Teil vor dem Komma
-    df["vorname"]  = name_split[1]                 # Teil nach dem Komma
-
-    section("2. Adresse aufteilen (Split an ', ' maxsplit=2, KEIN strip)")
-    adr_split = df["Straße Nr, PLZ Ort"].str.split(TRENNER, n=2, expand=True)   # max. 2 Splits -> 3 Spalten
-    df["strasse_nr"] = adr_split[0]                # "Musterweg 12"
-    df["plz"]        = adr_split[1]                # Postleitzahl
-    df["stadt"]      = adr_split[2]                # Ortsname (Rest der Zeichenkette)
-
-    section("3. Hobbys parsen -> Hobby1..5 / Prio1..5")
-    parsed = df[HOBBY_COL].apply(                  # je Zeile eine Liste aus (Hobby, Prio)-Paaren erzeugen
-        lambda t: HOBBY_PATTERN.findall(t) if isinstance(t, str) else []   # Nicht-Strings -> leere Liste
-    )
-    for i in range(1, 6):                          # fuer die Hobby-Plaetze 1 bis 5
-        df[f"Hobby{i}"] = parsed.apply(
-            lambda p, i=i: p[i-1][0].strip() if len(p) >= i else None      # Name des i-ten Hobbys, sonst None
-        )
-        df[f"Prio{i}"] = parsed.apply(
-            lambda p, i=i: int(p[i-1][1]) if len(p) >= i else None         # Prioritaet des i-ten Hobbys als int
-        )
-    print("Hobby-Spalten erstellt.")               # Statusmeldung
-
-    section("4. Geburtsdatum parsen und Schluessel ergaenzen")
-    df["geburtsdatum"] = pd.to_datetime(
-        df["Geburtsdatum"], format="%d.%m.%Y", errors="coerce"   # deutsches Datumsformat; ungueltige Werte -> NaT
-    ).dt.date                                                    # nur das Datum ohne Uhrzeit behalten
-    nicht_parsebar = df["geburtsdatum"].isna().sum()             # Anzahl fehlgeschlagener Umwandlungen
-    if nicht_parsebar:                                           # falls es welche gab
-        print(f"WARNUNG: {nicht_parsebar} Geburtsdaten nicht parsebar (werden NULL).")   # warnen (verletzt spaeter NOT NULL)
-
-    df.insert(0, "install", range(1, len(df) + 1))   # laufende Nummer als erste Spalte
-    df.insert(1, "imp", "Excel")                     # Herkunftskennzeichen der Daten
-
-    section("5. ort-Tabelle: eindeutige (plz, stadt)-Kombinationen")
-    ort = (df[["plz", "stadt"]].drop_duplicates()               # Duplikate entfernen
-           .sort_values(["plz", "stadt"]).reset_index(drop=True))   # sortieren und Index neu durchnummerieren
-    ort.insert(0, "ort_id", range(1, len(ort) + 1))             # kuenstlichen Primaerschluessel vergeben
-    ort_lookup = {(r.plz, r.stadt): r.ort_id for r in ort.itertuples()}   # Nachschlagetabelle (plz, stadt) -> ort_id
-    print(f"{len(ort)} unterschiedliche Orte")                  # Kontrollausgabe
-
-    section("6. hobby-Tabelle: eindeutige Hobby-Namen")
-    alle_hobbys = pd.unique(
-        pd.concat([df[f"Hobby{i}"] for i in range(1, 6)]).dropna()   # alle 5 Hobby-Spalten untereinander, ohne None
-    )
-    hobby = pd.DataFrame({"hobby_id": range(1, len(alle_hobbys) + 1),   # fortlaufende IDs
-                           "name": alle_hobbys})                        # zugehoerige Namen
-    hobby_lookup = {r.name: r.hobby_id for r in hobby.itertuples()}     # Nachschlagetabelle Name -> hobby_id
-    print(f"{len(hobby)} unterschiedliche Hobbys")                      # Kontrollausgabe
-
-    section("7. person-Tabelle (ohne Kontaktfelder)")
-    person = pd.DataFrame({
-        "person_id":      range(1, len(df) + 1),        # Primaerschluessel, Zeilenreihenfolge der Excel
-        "install":        df["install"].values,         # laufende Nummer aus Schritt 4
-        "imp":            df["imp"].values,             # Herkunft "Excel"
-        "nachname":       df["nachname"].values,        # aus Schritt 1
-        "vorname":        df["vorname"].values,         # aus Schritt 1
-        "geschlecht":     df["Geschlecht (m/w/nonbinary)"].values,   # unveraendert aus der Excel
-        "interessiert_an":df["Interessiert an"].values,              # unveraendert aus der Excel
-        "geburtsdatum":   df["geburtsdatum"].values,                 # aus Schritt 4
-        "ort_id":         [ort_lookup[(p, s)]                        # Fremdschluessel per Lookup aufloesen
-                           for p, s in zip(df["plz"], df["stadt"])],
-    })
-    print(f"{len(person)} Personen")                    # Kontrollausgabe
-
-    section("7b. kontakt-Tabelle: email, strasse_nr, telefon")
-    kontakt = pd.DataFrame({
-        "kontakt_id": range(1, len(df) + 1),            # eigener Primaerschluessel
-        "person_id":  range(1, len(df) + 1),            # 1:1-Bezug zur person-Tabelle
-        "email":      df["E-Mail"].values,              # E-Mail unveraendert
-        "strasse_nr": df["strasse_nr"].values,          # aus Schritt 2
-        "telefon":    df["Telefon"].values,             # Telefonnummer unveraendert
-    })
-    print(f"{len(kontakt)} Kontakt-Eintraege")          # Kontrollausgabe
-
-    section("8. person_hobby-Tabelle: n:m-Zuordnung")
-    zuordnungen = []                                    # Sammelliste fuer die Zuordnungszeilen
-    for zeilen_idx, row in df.iterrows():               # jede Personenzeile durchgehen
-        pid = zeilen_idx + 1                            # Index 0-basiert -> person_id 1-basiert
-        for i in range(1, 6):                           # die bis zu 5 Hobby-Plaetze pruefen
-            h = row[f"Hobby{i}"]                        # Hobbyname
-            p = row[f"Prio{i}"]                         # zugehoerige Prioritaet
-            if pd.notna(h):                             # nur belegte Plaetze uebernehmen
-                zuordnungen.append({
-                    "person_id": pid,                                   # Verweis auf person
-                    "hobby_id":  hobby_lookup[h],                       # Verweis auf hobby
-                    "prioritaet": int(p) if pd.notna(p) else None,      # Prioritaet als int oder NULL
-                })
-    person_hobby = pd.DataFrame(zuordnungen)            # Liste in DataFrame umwandeln
-    print(f"{len(person_hobby)} Person-Hobby-Zuordnungen")   # Kontrollausgabe
-
-    section("9. PostgreSQL: Objekte ersetzen und neu anlegen")
-    engine = create_engine(                             # Verbindungsobjekt zur Datenbank bauen
-        f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}"    # Treiber + Zugangsdaten
-        f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"                   # Host, Port, Datenbankname
-    )
-
-    with engine.begin() as conn:                        # Transaktion: am Ende automatisch COMMIT
-        conn.execute(text("DROP VIEW  IF EXISTS migration_users CASCADE"))   # View zuerst weg
-        conn.execute(text("DROP TABLE IF EXISTS letsmeet      CASCADE"))     # evtl. alte Rohtabelle entfernen
-        conn.execute(text("DROP TABLE IF EXISTS person_hobby  CASCADE"))     # Reihenfolge: Kind- vor Elterntabellen
-        conn.execute(text("DROP TABLE IF EXISTS kontakt       CASCADE"))     # haengt an person
-        conn.execute(text("DROP TABLE IF EXISTS person        CASCADE"))     # haengt an ort
-        conn.execute(text("DROP TABLE IF EXISTS hobby         CASCADE"))     # Stammtabelle
-        conn.execute(text("DROP TABLE IF EXISTS ort           CASCADE"))     # Stammtabelle
-
-        conn.execute(text("""
-            CREATE TABLE ort (
-                ort_id  INTEGER PRIMARY KEY,       -- kuenstlicher Schluessel
-                plz     TEXT    NOT NULL,          -- PLZ als Text (fuehrende Nullen bleiben erhalten)
-                stadt   TEXT    NOT NULL,          -- Ortsname
-                UNIQUE (plz, stadt)                -- jede Kombination nur einmal
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE hobby (
-                hobby_id INTEGER PRIMARY KEY,      -- kuenstlicher Schluessel
-                name     TEXT    NOT NULL UNIQUE   -- Hobbyname, keine Dubletten
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE person (
-                person_id       INTEGER PRIMARY KEY,   -- kuenstlicher Schluessel
-                install         INTEGER,               -- laufende Nummer aus dem Import
-                imp             TEXT,                  -- Herkunft der Daten
-                nachname        TEXT    NOT NULL,      -- Pflichtfeld der View
-                vorname         TEXT    NOT NULL,      -- Pflichtfeld der View
-                geschlecht      TEXT,                  -- optional
-                interessiert_an TEXT,                  -- optional
-                geburtsdatum    DATE    NOT NULL,      -- Pflichtfeld der View
-                ort_id          INTEGER NOT NULL REFERENCES ort(ort_id)   -- Fremdschluessel auf ort
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE kontakt (
-                kontakt_id INTEGER PRIMARY KEY,                                  -- kuenstlicher Schluessel
-                person_id  INTEGER NOT NULL UNIQUE REFERENCES person(person_id), -- UNIQUE erzwingt 1:1 zu person
-                email      TEXT    NOT NULL UNIQUE,                              -- Pflichtfeld, keine Dubletten
-                strasse_nr TEXT,                                                 -- optional
-                telefon    TEXT                                                  -- optional
-            )
-        """))
-        conn.execute(text("""
-            CREATE TABLE person_hobby (
-                person_id   INTEGER NOT NULL REFERENCES person(person_id),   -- FK auf person
-                hobby_id    INTEGER NOT NULL REFERENCES hobby(hobby_id),     -- FK auf hobby
-                prioritaet  INTEGER,                                         -- Rang 1..5, optional
-                PRIMARY KEY (person_id, hobby_id)                            -- jedes Hobby je Person nur einmal
-            )
-        """))
-    print("Tabellen ort, hobby, person, person_hobby angelegt.")   # Statusmeldung
-
-    ort.to_sql("ort",           engine, if_exists="append", index=False)   # Stammdaten zuerst (FK-Reihenfolge)
-    hobby.to_sql("hobby",       engine, if_exists="append", index=False)   # Hobby-Stammdaten
-    person.to_sql("person",     engine, if_exists="append", index=False)   # braucht ort
-    kontakt.to_sql("kontakt",   engine, if_exists="append", index=False)   # braucht person
-    person_hobby.to_sql("person_hobby", engine, if_exists="append", index=False)   # braucht person und hobby
-    print("Alle Daten eingefuegt.")                    # Statusmeldung
-
-    section("10. View migration_users auf normalisiertem Schema")
-    with engine.begin() as conn:                       # neue Transaktion
-        conn.execute(text("""
-            CREATE VIEW migration_users AS             -- Zielformat fuer die Migration
-            SELECT
-                k.email         AS email,              -- aus kontakt
-                p.vorname       AS first_name,         -- aus person
-                p.nachname      AS last_name,          -- aus person
-                p.geburtsdatum  AS birth_date,         -- aus person
-                o.plz           AS postal_code,        -- aus ort
-                o.stadt         AS city                -- aus ort
-            FROM person p
-            JOIN ort o     ON p.ort_id    = o.ort_id       -- Ort je Person
-            JOIN kontakt k ON k.person_id = p.person_id    -- Kontaktdaten je Person
-        """))
-    print("View 'migration_users' angelegt.")          # Statusmeldung
-
-    section("Kontrolle")
-    with engine.connect() as conn:                     # nur lesende Verbindung
-        for t in ["ort", "hobby", "person", "kontakt", "person_hobby"]:   # alle Tabellen durchgehen
-            n = conn.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar()  # Zeilen zaehlen
-            print(f"  {t}: {n} Zeilen")                                   # Ergebnis ausgeben
-
-        n_view = conn.execute(
-            text("SELECT COUNT(*) FROM migration_users")).scalar()            # Zeilen in der View
-        n_email = conn.execute(
-            text("SELECT COUNT(DISTINCT email) FROM migration_users")).scalar()   # eindeutige E-Mails (Dublettenpruefung)
-        print(f"  migration_users (View): {n_view} Zeilen, "
-              f"{n_email} eindeutige E-Mails")                                # beides ausgeben
-
-        nulls = conn.execute(text("""
-            SELECT
-                COUNT(*) FILTER (WHERE email IS NULL)        AS email_null,   -- je Pflichtfeld die NULL-Werte zaehlen
-                COUNT(*) FILTER (WHERE first_name IS NULL)   AS fn_null,
-                COUNT(*) FILTER (WHERE last_name IS NULL)    AS ln_null,
-                COUNT(*) FILTER (WHERE birth_date IS NULL)   AS bd_null,
-                COUNT(*) FILTER (WHERE postal_code IS NULL)  AS plz_null,
-                COUNT(*) FILTER (WHERE city IS NULL)         AS city_null
-            FROM migration_users
-        """)).fetchone()                                                       # eine Ergebniszeile holen
-        print(f"\n  NULL-Check View-Pflichtfelder: {dict(zip(nulls._fields, nulls))}")   # Spaltennamen mit Werten paaren
-
-        print("\n  Beispiel-Join (Person 1 mit Ort und Hobbys):")   # Ueberschrift der Stichprobe
-        ergebnis = conn.execute(text("""
-            SELECT p.vorname, p.nachname, o.plz, o.stadt,
-                   h.name AS hobby, ph.prioritaet          -- Person mit Ort und allen Hobbys
-            FROM person p
-            JOIN ort o ON p.ort_id = o.ort_id                       -- Ort dazu
-            JOIN person_hobby ph ON ph.person_id = p.person_id      -- Zuordnungstabelle
-            JOIN hobby h ON h.hobby_id = ph.hobby_id                -- Hobbynamen aufloesen
-            WHERE p.person_id = 1                                   -- nur die erste Person
-            ORDER BY ph.prioritaet DESC                             -- hoechste Prioritaetszahl zuerst
-        """)).fetchall()                                            # alle Zeilen holen
-        for zeile in ergebnis:                                      # Ergebniszeilen ausgeben
-            print(f"    {zeile}")
+    engine = create_engine(DB_URL)                 # Verbindung aufbauen
+    erstelle_schema(engine)                        # Schema sicherstellen
+    importiere(engine, lade_excel(), "Excel")      # 1. Quelle
+    importiere(engine, lade_mongodb(), "MongoDB")  # 2. Quelle, ergaenzt die erste
+    kontrolle(engine)                              # Ergebnis pruefen
 
 
 if __name__ == "__main__":     # nur bei direktem Aufruf, nicht beim Import
