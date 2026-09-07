@@ -1,5 +1,4 @@
 
-
 import re                                         # Regex fuer die Hobby-Spalte
 import pandas as pd                               # Einlesen und Umformen der Quelldaten
 from pathlib import Path                          # plattformunabhaengige Pfade
