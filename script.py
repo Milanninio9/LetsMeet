@@ -703,7 +703,6 @@ def main():
     akt2(engine)
     akt3(engine)
     kontrolle(engine)
-    print("\nFertig. Script kann nochmal laufen ohne Fehler.")
 
 
 if __name__ == "__main__":
