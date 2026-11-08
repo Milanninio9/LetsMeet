@@ -1,6 +1,5 @@
 # LetsMeet Migration - Akt 1, 2 und 3
 # Baut die Zieldatenbank aus Excel, MongoDB und XML auf.
-# Kann mehrmals laufen ohne Fehler, weil vorher alles gedroppt wird.
 
 import re
 import xml.etree.ElementTree as ET
