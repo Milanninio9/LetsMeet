@@ -1,3 +1,7 @@
+# LetsMeet Migration - Akt 1, 2 und 3
+# Baut die Zieldatenbank aus Excel, MongoDB und XML auf.
+# Kann mehrmals laufen ohne Fehler, weil vorher alles gedroppt wird.
+
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -5,12 +9,6 @@ from pathlib import Path
 import pandas as pd
 from pymongo import MongoClient
 from sqlalchemy import create_engine, text
-
-# Ordner in dem dieses Script liegt (fuer Vorlage-Dateien)
-try:
-    SCRIPT_DIR = Path(__file__).resolve().parent
-except NameError:
-    SCRIPT_DIR = Path.cwd()
 
 # Verbindungsdaten - pg8000 weil auf dem Schulserver kein psycopg2 da ist
 DB = "postgresql+pg8000://user:secret@127.0.0.1:5432/lf8_lets_meet_db"
@@ -27,46 +25,9 @@ HOBBY_PAT = re.compile(r"([^%;]+?)\s*%(\d+)%\s*;?")
 PRIO_MIN = -100
 PRIO_MAX = 100
 
-# ----------------------------------------------------------------------
-# Vorlagen fuer das Aenderungspaket (Akt 3).
-# Diese drei Dateien liegen nicht immer auf dem Server - das Script legt
-# sie bei Bedarf selbst an. Die Encoding-Dateien enthalten absichtlich
-# kaputte Bytes (Latin-1 bzw. Mojibake), daher als bytes definiert.
-# ----------------------------------------------------------------------
-VORLAGE_CHANGE_REQUEST = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    '<transferpack>\n'
-    '  <records>\n'
-    '    <like email="abdel.sabah@1mal1.te" target_email="transfer.orphan@letsmeet.invalid"/>\n'
-    '    <hobby email="abdel.sabah@1mal1.te" name="E-Mails schreiben"/>\n'
-    '    <hobby email="abdulk..stuckmann@web.kom" name="Abends seinem Partner Ereignisse des Tages erz\u00e4hlen" priority="101"/>\n'
-    '    <profile email="transfer.p2@letsmeet.invalid" first_name="Pia" last_name="Transfer" birth_date="01.01.1900" postal_code="69115" city="unbekannt" phone="+49 6221 123456" gender="w"/>\n'
-    '    <hobby email="acar.nehir@ge-em-ix.kom" name="Abends seinem Partner Ereignisse des Tages erz\u00e4hlen"/>\n'
-    '    <hobby email="acar.nehir@ge-em-ix.kom" name="Abends seinem Partner Ereignisse des Tages erz\u00e4hlen"/>\n'
-    '  </records>\n'
-    '</transferpack>\n'
-).encode("utf-8")
-
-# encoding-invalid: enthaelt Byte 0xE9 (Latin-1 fuer e-acute) mitten im UTF-8
-VORLAGE_ENCODING_INVALID = (
-    b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    b'<transferpack><records><profile email="transfer.bytes@letsmeet.invalid" '
-    b'first_name="Andr\xe9" last_name="Byte" birth_date="1988-04-12" '
-    b'postal_code="50667" city="Koeln" phone="+49 221 123456" gender="m"/>'
-    b'</records></transferpack>\n'
-)
-
-# encoding-mojibake: doppelt-encodierte Umlaute (M+C3 83 C2 BC = Mueller, K+C3 B6 = Koeln)
-VORLAGE_ENCODING_MOJIBAKE = (
-    b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    b'<transferpack><records><profile email="transfer.mojibake@letsmeet.invalid" '
-    b'first_name="M\xc3\x83\xc2\xbcller" last_name="Text" birth_date="1988-04-12" '
-    b'postal_code="50667" city="K\xc3\xb6ln" phone="+49 221 123457" gender="w"/>'
-    b'</records></transferpack>\n'
-)
-
 
 # sucht eine Datei an den ueblichen Orten, damit das Script egal wo laeuft
+# gibt None zurueck wenn es die Datei nirgends gibt - es wird NICHTS angelegt
 def finde(name):
     orte = [Path.cwd(), Path.home(), Path.home() / "work" / "letsmeet",
             Path.home() / "LetsMeet"]
@@ -79,19 +40,6 @@ def finde(name):
     if treffer:
         return treffer[0]
     return None
-
-
-# legt eine Vorlage-Datei an falls sie noch nicht existiert, gibt den Pfad zurueck
-def datei_sicherstellen(name, inhalt_bytes):
-    # erst schauen ob es die Datei schon irgendwo gibt
-    vorhanden = finde(name)
-    if vorhanden is not None:
-        return vorhanden
-    # sonst neben dem Script anlegen
-    ziel = SCRIPT_DIR / name
-    ziel.write_bytes(inhalt_bytes)
-    print(f"  Vorlage angelegt: {ziel}")
-    return ziel
 
 
 # wandelt einen Zeitstempel-Text in ein echtes Datum um
@@ -242,9 +190,8 @@ def akt1(engine):
                 telefon TEXT
             )"""))
         # person_hobby: Zwischentabelle fuer n:m.
-        # source ist Teil vom Schluessel, damit dieselbe Zuordnung theoretisch
-        # aus verschiedenen Quellen kommen koennte - fachlich sorgen wir aber
-        # dafuer, dass eine Zuordnung nur einmal existiert (siehe Akt 3).
+        # source ist Teil vom Schluessel, damit excel- und xml-Zuordnung
+        # nebeneinander bestehen koennen.
         conn.execute(text("""
             CREATE TABLE person_hobby (
                 person_id INTEGER NOT NULL REFERENCES person(person_id),
@@ -326,7 +273,7 @@ def akt2(engine):
         neu_vor = vorname
         neu_tel = telefon
 
-        # Name aus MongoDB nehmen wenn vorhanden
+        # Name aus MongoDB nehmen wenn vorhanden (MongoDB gewinnt komplett)
         mongo_name = mdoc.get("name", "")
         if wert_ok(mongo_name):
             teile = mongo_name.split(", ", 1)
@@ -490,29 +437,26 @@ def akt3(engine):
             "SELECT k.email, p.person_id FROM person p JOIN kontakt k ON k.person_id=p.person_id")).fetchall()}
         # Hobbyname -> hobby_id
         name_zu_hid = {r[0]: r[1] for r in conn.execute(text("SELECT name, hobby_id FROM hobby")).fetchall()}
-        # welche Person/Hobby-Kombis gibt es schon (aus Excel/Akt1)
-        # nur person_id + hobby_id, ohne source - wir wollen wissen ob die
-        # Zuordnung fachlich schon existiert
-        schon_da = {(r[0], r[1]) for r in conn.execute(text("SELECT person_id, hobby_id FROM person_hobby")).fetchall()}
-        # zusaetzlich die Zuordnungen als (email, hobbyname) - robust gegen
-        # fehlende IDs, damit die Bestandspruefung sicher greift
+    print(f"Bestand: {len(bestand)} Emails")
+
+    # hier sammeln wir neue XML-Hobbys und die Ablehnungen
+    xml_hobbys = []
+    ablehnungen = []
+    # welche (email, hobbyname) gibt es schon aus Excel - damit change-request
+    # keine Zuordnung doppelt anlegt, die fachlich schon da ist
+    with engine.connect() as conn:
         schon_da_namen = {(r[0].lower(), r[1]) for r in conn.execute(text("""
             SELECT k.email, h.name
             FROM person_hobby ph
             JOIN kontakt k ON k.person_id = ph.person_id
             JOIN hobby h ON h.hobby_id = ph.hobby_id
         """)).fetchall()}
-    print(f"Bestand: {len(bestand)} Emails, {len(schon_da)} Zuordnungen")
-
-    # hier sammeln wir neue XML-Hobbys und die Ablehnungen
-    xml_hobbys = []
-    ablehnungen = []
 
     # ---- Basis-XML einlesen ----
-    # Basis-XML-Hobbys kommen alle als source='xml' rein (additive Quelle).
+    # Wenn die Datei fehlt wird NICHTS angelegt - nur ein Hinweis und weiter.
     basis_pfad = finde("Lets_Meet_Hobbies.xml")
     if basis_pfad is None:
-        print("  HINWEIS: Lets_Meet_Hobbies.xml nicht gefunden - Basis-XML wird uebersprungen.")
+        print("  Datei fehlt: Lets_Meet_Hobbies.xml - wird uebersprungen")
         users = []
     else:
         users = ET.parse(basis_pfad).getroot().findall("user")
@@ -523,10 +467,19 @@ def akt3(engine):
             name = (h.text or "").strip()
             if email and name:
                 xml_hobbys.append((email, name))
+                # auch hier als vorhanden merken
+                schon_da_namen.add((email.lower(), name))
     print(f"Basis-XML: {len(users)} User, {len(xml_hobbys)} Hobbys")
 
     # ---- change-request.xml durchgehen ----
-    records = ET.parse(datei_sicherstellen("change-request.xml", VORLAGE_CHANGE_REQUEST)).getroot().find("records")
+    # Fehlt die Datei: Hinweis ausgeben und diesen Teil ueberspringen.
+    cr_pfad = finde("change-request.xml")
+    if cr_pfad is None:
+        print("  Datei fehlt: change-request.xml - wird uebersprungen")
+        records = []
+    else:
+        records = ET.parse(cr_pfad).getroot().find("records")
+
     # Zaehler pro Typ fuer die source_ref (hobby[1], hobby[2] usw.)
     zaehler = {}
     # damit wir Duplikate im Paket selbst erkennen
@@ -542,174 +495,4 @@ def akt3(engine):
         if typ == "like":
             ziel = rec.get("target_email", "")
             absender = rec.get("email", "")
-            # Ziel muss es geben
-            if ziel.lower() not in bestand:
-                ablehnungen.append((quelle, ref, f"Like-Ziel '{ziel}' gibt es nicht im Bestand"))
-            elif absender.lower() not in bestand:
-                ablehnungen.append((quelle, ref, f"Like-Absender '{absender}' gibt es nicht"))
-            else:
-                ablehnungen.append((quelle, ref, "Like nicht uebernommen (kein gueltiges Ziel)"))
-
-        # --- Hobby ---
-        elif typ == "hobby":
-            email = rec.get("email", "")
-            name = rec.get("name", "")
-            prio = rec.get("priority")
-
-            # priority pruefen falls angegeben
-            if prio is not None:
-                try:
-                    pv = int(prio)
-                    # ausserhalb vom erlaubten Bereich -> fehlerhaft
-                    if pv < PRIO_MIN or pv > PRIO_MAX:
-                        ablehnungen.append((quelle, ref, f"priority {pv} ausserhalb {PRIO_MIN} bis {PRIO_MAX}"))
-                        continue
-                except ValueError:
-                    ablehnungen.append((quelle, ref, f"priority '{prio}' ist keine Zahl"))
-                    continue
-
-            # Person muss es geben
-            if email.lower() not in bestand:
-                ablehnungen.append((quelle, ref, f"Person '{email}' gibt es nicht im Bestand"))
-                continue
-
-            # schon im Bestand vorhanden (aus Excel)?
-            # Regel: fachlich gleiche Person/Hobby-Zuordnung nur einmal.
-            # Ueber (email, hobbyname) pruefen - unabhaengig von den IDs.
-            if (email.lower(), name) in schon_da_namen:
-                ablehnungen.append((quelle, ref, f"Zuordnung '{name}' schon im Bestand vorhanden"))
-                continue
-
-            # schon im Paket selbst vorgekommen? (Duplikat in der Lieferung)
-            kombi = (email.lower(), name)
-            if kombi in im_paket:
-                ablehnungen.append((quelle, ref, "Doppelte Zuordnung im Paket (schon uebernommen)"))
-                continue
-
-            # alles ok -> merken zum Eintragen
-            im_paket.add(kombi)
-            xml_hobbys.append((email, name))
-
-        # --- Profile ---
-        elif typ == "profile":
-            email = rec.get("email", "")
-            # .invalid-Adressen sind Testprofile, keine echten Personen
-            ablehnungen.append((quelle, ref,
-                f"Testprofil '{email}' (.invalid, Platzhalterdaten) - keine echte Person"))
-
-    # ---- encoding-invalid.xml: kaputtes UTF-8 als Latin-1 lesen ----
-    inv = datei_sicherstellen("encoding-invalid.xml", VORLAGE_ENCODING_INVALID).read_bytes().decode("latin-1")
-    e_inv = re.search(r'email="([^"]*)"', inv)
-    f_inv = re.search(r'first_name="([^"]*)"', inv)
-    email_inv = e_inv.group(1) if e_inv else ""
-    name_inv = f_inv.group(1) if f_inv else ""
-    ablehnungen.append(("encoding-invalid.xml", "/transferpack/records/profile[1]",
-        f"Encoding repariert (Latin-1 -> '{name_inv}'); Testprofil '{email_inv}' (.invalid)"))
-
-    # ---- encoding-mojibake.xml: doppelt kaputte Umlaute reparieren ----
-    moj = datei_sicherstellen("encoding-mojibake.xml", VORLAGE_ENCODING_MOJIBAKE).read_bytes().decode("latin-1")
-    e_moj = re.search(r'email="([^"]*)"', moj)
-    f_moj = re.search(r'first_name="([^"]*)"', moj)
-    email_moj = e_moj.group(1) if e_moj else ""
-    name_moj = repariere_text(f_moj.group(1)) if f_moj else ""
-    ablehnungen.append(("encoding-mojibake.xml", "/transferpack/records/profile[1]",
-        f"Encoding repariert (Mojibake -> '{name_moj}'); Testprofil '{email_moj}' (.invalid)"))
-
-    # ---- neue Hobby-Namen aus XML anlegen ----
-    with engine.begin() as conn:
-        vorhandene = {r[0] for r in conn.execute(text("SELECT name FROM hobby")).fetchall()}
-        # nur die Namen die es noch nicht gibt
-        for name in {n for _, n in xml_hobbys} - vorhandene:
-            conn.execute(text("INSERT INTO hobby (name, source) VALUES (:n, 'xml') ON CONFLICT (name) DO NOTHING"),
-                         {"n": name})
-    # IDs neu holen (jetzt auch die neuen)
-    with engine.connect() as conn:
-        name_zu_hid = {r[0]: r[1] for r in conn.execute(text("SELECT name, hobby_id FROM hobby")).fetchall()}
-
-    # ---- XML-Hobbys in person_hobby eintragen ----
-    # Basis-XML kommt additiv rein. Falls dieselbe (Person,Hobby) mehrfach im
-    # XML steht, nur einmal eintragen. Gegen Excel wird NICHT geprueft -
-    # eine excel- und eine xml-Zuordnung koennen nebeneinander stehen, weil
-    # die Basis-XML eine eigene Quelle ist.
-    eintraege = []
-    gesehen = set()
-    for email, name in xml_hobbys:
-        pid = email_zu_pid.get(email.lower())
-        hid = name_zu_hid.get(name)
-        # nur wenn beide IDs da sind
-        if pid is None or hid is None:
-            continue
-        # XML-Kombi schon in diesem Lauf gesehen? (Duplikat im XML)
-        if (pid, hid) in gesehen:
-            continue
-        # schon aus Excel vorhanden? Dann nicht als zweite Zeile - die
-        # fachlich gleiche Zuordnung gibt es nur einmal (quellenuebergreifend)
-        if (email.lower(), name) in schon_da_namen:
-            continue
-        gesehen.add((pid, hid))
-        eintraege.append({"person_id": pid, "hobby_id": hid, "prioritaet": None, "source": "xml"})
-
-    # einzeln einfuegen mit ON CONFLICT auf den vollen PK (inkl. source)
-    with engine.begin() as conn:
-        for e in eintraege:
-            conn.execute(text("""
-                INSERT INTO person_hobby (person_id, hobby_id, prioritaet, source)
-                VALUES (:person_id, :hobby_id, :prioritaet, :source)
-                ON CONFLICT (person_id, hobby_id, source) DO NOTHING
-            """), e)
-    print(f"{len(eintraege)} XML-Hobbys eingetragen")
-
-    # ---- migration_rejections bauen ----
-    with engine.begin() as conn:
-        conn.execute(text("DROP VIEW IF EXISTS migration_rejections CASCADE"))
-        conn.execute(text("DROP TABLE IF EXISTS stg_rejections CASCADE"))
-        # Tabelle mit PK, damit jede Ablehnung nur einmal drinsteht
-        conn.execute(text("""
-            CREATE TABLE stg_rejections (
-                source TEXT NOT NULL,
-                source_ref TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                PRIMARY KEY (source, source_ref)
-            )"""))
-        # alle Ablehnungen eintragen
-        for quelle, ref, grund in ablehnungen:
-            conn.execute(text("""
-                INSERT INTO stg_rejections (source, source_ref, reason)
-                VALUES (:s, :r, :grund)
-                ON CONFLICT (source, source_ref) DO UPDATE SET reason = EXCLUDED.reason
-            """), {"s": quelle, "r": ref, "grund": grund})
-        # die View drauf
-        conn.execute(text("CREATE VIEW migration_rejections AS SELECT source, source_ref, reason FROM stg_rejections"))
-    print(f"{len(ablehnungen)} Ablehnungen dokumentiert")
-
-
-# ======================================================================
-# Kontrolle - am Ende zeigen was rausgekommen ist
-# ======================================================================
-def kontrolle(engine):
-    ueberschrift("KONTROLLE")
-    with engine.connect() as conn:
-        # Zeilen pro View zaehlen
-        for v in ["migration_users", "migration_user_interests", "migration_user_hobbies",
-                  "migration_likes", "migration_messages", "migration_rejections"]:
-            n = conn.execute(text(f"SELECT COUNT(*) FROM {v}")).scalar()
-            print(f"  {v}: {n} Zeilen")
-        # wie viele Hobbys kommen aus XML
-        n_xml = conn.execute(text("SELECT COUNT(*) FROM migration_user_hobbies WHERE source='xml'")).scalar()
-        print(f"\n  davon source='xml': {n_xml}")
-        # die Ablehnungen auflisten
-        print("\n  Ablehnungen:")
-        for r in conn.execute(text("SELECT source, source_ref, reason FROM migration_rejections ORDER BY source, source_ref")).fetchall():
-            print(f"    [{r[0]} {r[1]}] {r[2]}")
-
-
-# Hauptprogramm - die drei Akte nacheinander
-def main():
-    engine = create_engine(DB)
-    akt1(engine)
-    akt2(engine)
-    akt3(engine)
-    kontrolle(engine)
-    
-if __name__ == "__main__":
-    main()
+         
